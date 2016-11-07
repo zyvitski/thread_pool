@@ -1,0 +1,6 @@
+{
+  "name": "C++11 - Thread pool",
+  "tagline": "",
+  "body": "# thread_pool [![Build Status](https://travis-ci.org/zyvitski/thread_pool.svg?branch=master)](https://travis-ci.org/zyvitski/thread_pool)\r\nGeneric C++11 Thread Pool Library\r\n",
+  "note": "Don't delete this file! It's used internally to help with page regeneration."
+}
