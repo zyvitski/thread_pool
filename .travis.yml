@@ -1,5 +1,5 @@
 sudo: required
-dist: precise
+dist: xenial
 language: cpp
 
 matrix:
@@ -18,12 +18,15 @@ matrix:
         apt:
           sources:
             - ubuntu-toolchain-r-test
-            - llvm-toolchain-precise-3.7
+            - llvm-toolchain-xenial-3.7
           packages:
             - clang-3.7
       env: COMPILER=clang++-3.7
 
 before_install:
   - sudo apt-get update -qq
+  - git clone https://github.com/zyvitski/thread_pool_cpp.git thread_pool
+  - cd thread_pool
+  - make install
 script:
-  - make
+  - make -e
