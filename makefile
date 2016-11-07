@@ -1,4 +1,4 @@
-PROGRAM_NAME =signals
+PROGRAM_NAME = signals
 CC = clang
 CXX = clang++
 RM = rm -f
