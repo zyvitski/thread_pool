@@ -18,10 +18,10 @@ matrix:
         apt:
           sources:
             - ubuntu-toolchain-r-test
-            - llvm-toolchain-xenial-3.7
+            - llvm-toolchain-xenial-3.9
           packages:
             - clang-3.7
-      env: COMPILER=clang++-3.7
+      env: COMPILER=clang++-3.9
 
 before_install:
   - sudo apt-get update -qq
