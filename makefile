@@ -1,4 +1,4 @@
-PROGRAM_NAME = signals
+PROGRAM_NAME = thread_pool
 CC = clang
 CXX = clang++
 RM = rm -f
