@@ -1,3 +1,4 @@
 *.o
 *.d
 thread_pool
+*.gch
