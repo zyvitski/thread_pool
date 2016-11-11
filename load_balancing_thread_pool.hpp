@@ -1,5 +1,5 @@
-#ifndef __load_balancing_thread_pool_hpp__
-#define __load_balancing_thread_pool_hpp__
+#ifndef _load_balancing_thread_pool_hpp_
+#define _load_balancing_thread_pool_hpp_
 #endif
 
 #include <atomic>
