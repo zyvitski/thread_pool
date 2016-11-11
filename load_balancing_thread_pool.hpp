@@ -129,7 +129,7 @@ private:
         std::size_t avg_load = average_load();
         bool done=false;
         for(auto&& data: _thread_data){
-            if(*data._load < avg_load){
+            if((*data._load < avg_load) && !*data._quit){
                 std::unique_lock<std::mutex> lk{*data._lock};
                 data._work.push_back(std::forward<T&&>(value));
                 ++(*data._load);
@@ -143,7 +143,7 @@ private:
             typename std::vector<thread_data>::iterator lowest_index = _thread_data.begin();
             std::size_t lowest = *lowest_index->_load;
             for(typename std::vector<thread_data>::iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
-                if (*data->_load < lowest)
+                if (*data->_load < lowest && !*data->_quit)
                 {
                     lowest_index = data;
                     lowest = data->_work.size();
@@ -181,26 +181,30 @@ private:
             std::atomic<std::size_t>& load = *data._load;
             std::mutex& lock = *data._lock;
             std::atomic_bool& quit = *data._quit;
+            auto&& consume = [&](){
+                work_type task;
+                {
+                    std::unique_lock<std::mutex> lk(lock);
+                    task = std::move(q.front());
+                    q.pop_front();
+                }
+                task();
+                --load;
+            };
             while (!quit)
             {
                 std::unique_lock<std::mutex> lk{_sleep};
                 _cv.wait(lk,[&](){
                     return load || quit;
                 });
-                if (!quit)
+                while (load)
                 {
-                    while (load)
-                    {
-                        work_type task;
-                        {
-                            std::unique_lock<std::mutex> lk(lock);
-                            task = std::move(q.front());
-                            q.pop_front();
-                        }
-                        task();
-                        --load;
-                    }
+                    consume();
                 }
+            }
+            while (load)
+            {
+                consume();
             }
         };
     }
