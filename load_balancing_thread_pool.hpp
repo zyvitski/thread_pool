@@ -117,12 +117,13 @@ private:
                 break;
             }
         }
-        //this branch will default to 0 if the system is empty
+        //this branch will default to begin if the system is empty
         if (!done)
         {
-            typename decltype(_thread_data)::iterator lowest_index = _thread_data.begin();
+            using iterator = typename decltype(_thread_data)::iterator;
+            iterator lowest_index = _thread_data.begin();
             std::size_t lowest = (*lowest_index)->_load;
-            for(typename decltype(_thread_data)::iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
+            for(iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
                 if ((*data)->_load < lowest && !(*data)->_quit)
                 {
                     lowest_index = data;
