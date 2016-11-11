@@ -19,7 +19,6 @@ int main(int argc, char** argv)
                 sync_print(k);
             },i);
         }
-        pool.resize(4);
     }catch(std::exception& e){
         std::cout<<e.what()<<std::endl;
     }
