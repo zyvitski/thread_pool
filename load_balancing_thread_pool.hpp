@@ -95,12 +95,10 @@ public:
     {
         auto&& pk = std::make_shared<std::packaged_task<decltype(f(args...))()>>(std::bind(std::forward<func&&>(f),std::forward<args_t&&>(args)...));
         //wrap task
-        {
-            _push([pk](){
-                (*pk)();
-            });
-            _cv.notify_all();
-        }
+        _push([pk](){
+            (*pk)();
+        });
+        _cv.notify_all();
         return pk->get_future();
     }
 
