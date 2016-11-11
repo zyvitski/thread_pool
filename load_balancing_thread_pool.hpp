@@ -158,32 +158,28 @@ private:
         //where index is the index used to match up the threads to the queues and loads
         return [&](){
             thread_data& data = const_cast<thread_data&>(_data);
-            queue_t<work_type>& q = data._work;
-            std::atomic<std::size_t>& load = data._load;
-            std::mutex& lock = data._lock;
-            std::atomic_bool& quit = data._quit;
             auto&& consume = [&](){
                 work_type task;
                 {
-                    std::unique_lock<std::mutex> lk(lock);
-                    task = std::move(q.front());
-                    q.pop_front();
+                    std::unique_lock<std::mutex> lk(data._lock);
+                    task = std::move(data._work.front());
+                    data._work.pop_front();
                 }
                 task();
-                --load;
+                --data._load;
             };
-            while (!quit)
+            while (!data._quit)
             {
                 std::unique_lock<std::mutex> lk{_sleep};
                 _cv.wait(lk,[&](){
-                    return load || quit;
+                    return data._load || data._quit;
                 });
-                while (load)
+                while (data._load)
                 {
                     consume();
                 }
             }
-            while (load)
+            while (data._load)
             {
                 consume();
             }
