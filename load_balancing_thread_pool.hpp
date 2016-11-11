@@ -23,51 +23,33 @@ private:
     using work_type = std::function<work_signiture>;
     struct thread_data
     {
-        thread_data():_lock(new std::mutex()),_load(new std::atomic<std::size_t>(0)),_quit(new std::atomic_bool(false)){}
-        thread_data(thread_data&& other):_thread(std::move(other._thread)),
-                                         _lock(std::move(other._lock)),
-                                         _load(std::move(other._load)),
-                                         _quit(std::move(other._quit)),
-                                         _work(std::move(other._work)){}
-        thread_data& operator=(thread_data&& other)
-        {
-            if (this != &other)
-            {
-                _thread = std::move(other._thread);
-                _lock = std::move(other._lock);
-                _load = std::move(other._load);
-                _work = std::move(other._work);
-                _quit = std::move(other._quit);
-            }
-            return *this;
-        }
         std::thread _thread;
-        std::unique_ptr<std::mutex> _lock;
-        std::unique_ptr<std::atomic<std::size_t>> _load;
-        std::unique_ptr<std::atomic_bool> _quit;
+        std::mutex _lock;
+        std::atomic<std::size_t> _load;
+        std::atomic_bool _quit;
         queue_t<work_type> _work;
     };
-
 public:
 
     basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N)
     {
         for(auto&& th: _thread_data){
-            th._thread = std::thread(init_thread(th));
+            th = std::unique_ptr<thread_data>(new thread_data());
+            th->_thread = std::thread(init_thread(*th));
         }
     }
     ~basic_load_balancing_thread_pool()
     {
         for (auto&& w: _thread_data)
         {
-            *w._quit = true;
+            w->_quit = true;
         }
         _cv.notify_all();
         for(auto&& w : _thread_data)
         {
-            if (w._thread.joinable())
+            if (w->_thread.joinable())
             {
-                w._thread.join();
+                w->_thread.join();
             }
         }
     }
@@ -85,18 +67,18 @@ public:
         {
             for(std::size_t i =0; i < diff; ++i)
             {
-                _thread_data.push_back(thread_data{});
-                _thread_data.back()._thread=std::thread(init_thread(_thread_data.back()));
+                _thread_data.push_back(std::unique_ptr<thread_data>(new thread_data()));
+                _thread_data.back()->_thread=std::thread(init_thread(*_thread_data.back()));
             }
         }
         else if(old > N)
         {
             for(std::size_t i=0; i <diff; ++i)
             {
-                *_thread_data.back()._quit = true;
-                if(_thread_data.back()._thread.joinable())
+                _thread_data.back()->_quit = true;
+                if(_thread_data.back()->_thread.joinable())
                 {
-                    _thread_data.back()._thread.join();
+                    _thread_data.back()->_thread.join();
                 }
             }
         }
@@ -129,10 +111,10 @@ private:
         std::size_t avg_load = average_load();
         bool done=false;
         for(auto&& data: _thread_data){
-            if((*data._load < avg_load) && !*data._quit){
-                std::unique_lock<std::mutex> lk{*data._lock};
-                data._work.push_back(std::forward<T&&>(value));
-                ++(*data._load);
+            if((data->_load < avg_load) && !data->_quit){
+                std::unique_lock<std::mutex> lk{data->_lock};
+                data->_work.push_back(std::forward<T&&>(value));
+                ++data->_load;
                 done = true;
                 break;
             }
@@ -140,19 +122,18 @@ private:
         //this branch will default to 0 if the system is empty
         if (!done)
         {
-            typename std::vector<thread_data>::iterator lowest_index = _thread_data.begin();
-            std::size_t lowest = *lowest_index->_load;
-            for(typename std::vector<thread_data>::iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
-                if (*data->_load < lowest && !*data->_quit)
+            typename decltype(_thread_data)::iterator lowest_index = _thread_data.begin();
+            std::size_t lowest = (*lowest_index)->_load;
+            for(typename decltype(_thread_data)::iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
+                if ((*data)->_load < lowest && !(*data)->_quit)
                 {
                     lowest_index = data;
-                    lowest = data->_work.size();
-                    /* code */
+                    lowest = (*data)->_work.size();
                 }
             }
-            std::unique_lock<std::mutex> lk{*lowest_index->_lock};
-            lowest_index->_work.push_back(std::forward<T&&>(value));
-            ++(*lowest_index->_load);
+            std::unique_lock<std::mutex> lk{(*lowest_index)->_lock};
+            (*lowest_index)->_work.push_back(std::forward<T&&>(value));
+            ++(*lowest_index)->_load;
         }
     }
 
@@ -162,7 +143,7 @@ private:
         {
             double avg=0;
             for(auto&& i: _thread_data){
-                avg += *i._load;
+                avg += i->_load;
             }
             avg/= _thread_data.size();
             return std::ceil(avg);
@@ -178,9 +159,9 @@ private:
         return [&](){
             thread_data& data = const_cast<thread_data&>(_data);
             queue_t<work_type>& q = data._work;
-            std::atomic<std::size_t>& load = *data._load;
-            std::mutex& lock = *data._lock;
-            std::atomic_bool& quit = *data._quit;
+            std::atomic<std::size_t>& load = data._load;
+            std::mutex& lock = data._lock;
+            std::atomic_bool& quit = data._quit;
             auto&& consume = [&](){
                 work_type task;
                 {
@@ -208,7 +189,7 @@ private:
             }
         };
     }
-    std::vector<thread_data> _thread_data;
+    std::vector<std::unique_ptr<thread_data>> _thread_data;
     std::condition_variable _cv;
     std::mutex _sleep;
 };
