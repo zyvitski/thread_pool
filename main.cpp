@@ -14,7 +14,7 @@ int main(int argc, char** argv)
     try{
         thread_pool pool;
 
-        for(int i =0; i < 1000;++i){
+        for(int i =0; i < 10000;++i){
             pool.push([](int k){
                 sync_print(k);
             },i);

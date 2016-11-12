@@ -1,6 +1,5 @@
 #ifndef _load_balancing_thread_pool_hpp_
 #define _load_balancing_thread_pool_hpp_
-#endif
 
 #include <atomic>
 #include <condition_variable>
@@ -63,7 +62,7 @@ public:
         diff = std::abs((double)diff);
         if(N > old)
         {
-            for(std::size_t i =0; i < diff; ++i)
+            for(std::size_t i = 0; i < diff; ++i)
             {
                 _thread_data.push_back(std::unique_ptr<thread_data>(new thread_data()));
                 _thread_data.back()->_thread=std::thread(init_thread(*_thread_data.back()));
@@ -71,7 +70,7 @@ public:
         }
         else if(old > N)
         {
-            for(std::size_t i=0; i <diff; ++i)
+            for(std::size_t i =0 ; i < diff; ++i)
             {
                 _thread_data.back()->_quit = true;
                 if(_thread_data.back()->_thread.joinable())
@@ -93,21 +92,40 @@ public:
     {
         auto&& pk = std::make_shared<std::packaged_task<decltype(f(args...))()>>(std::bind(std::forward<func&&>(f),std::forward<args_t&&>(args)...));
         //wrap task
-        _push([pk](){
+        _balanced_push([pk]()
+        {
             (*pk)();
         });
         _cv.notify_all();
         return pk->get_future();
     }
-
+    std::size_t average_load() const
+    {
+        if (_thread_data.size())
+        {
+            double avg=0;
+            for(auto&& i: _thread_data)
+            {
+                avg += i->_load;
+            }
+            avg /= _thread_data.size();
+            return std::ceil(avg);
+        }
+        else
+        {
+            return {};
+        }
+    }
 private:
     template<typename T>
-    void _push(T&& value)
+    void _balanced_push(T&& value)
     {
-        std::size_t avg_load = average_load();
-        bool done=false;
-        for(auto&& data: _thread_data){
-            if((data->_load < avg_load) && !data->_quit){
+        const std::size_t avg_load = average_load();
+        bool done = false;
+        for(auto&& data: _thread_data)
+        {
+            if((data->_load < avg_load) && !data->_quit)
+            {
                 std::unique_lock<std::mutex> lk{data->_lock};
                 data->_work.push_back(std::forward<T&&>(value));
                 ++data->_load;
@@ -121,7 +139,8 @@ private:
             using iterator = typename decltype(_thread_data)::iterator;
             iterator lowest_index = _thread_data.begin();
             std::size_t lowest = (*lowest_index)->_load;
-            for(iterator data = _thread_data.begin(); data != _thread_data.end(); ++data){
+            for(iterator data = _thread_data.begin(); data != _thread_data.end(); ++data)
+            {
                 if ((*data)->_load < lowest && !(*data)->_quit)
                 {
                     lowest_index = data;
@@ -134,27 +153,15 @@ private:
         }
     }
 
-    std::size_t average_load()
-    {
-        if (_thread_data.size())
-        {
-            double avg=0;
-            for(auto&& i: _thread_data){
-                avg += i->_load;
-            }
-            avg/= _thread_data.size();
-            return std::ceil(avg);
-        }
-        else
-        {
-            return {};
-        }
-    }
+
+
     work_type init_thread(thread_data& data)
     {
         //where index is the index used to match up the threads to the queues and loads
-        return [&](){
-            auto&& consume = [&](){
+        return [&]()
+        {
+            auto&& consume = [&]()
+            {
                 work_type task;
                 {
                     std::unique_lock<std::mutex> lk(data._lock);
@@ -181,9 +188,13 @@ private:
             }
         };
     }
+
     std::vector<std::unique_ptr<thread_data>> _thread_data;
+
     std::condition_variable _cv;
+
     std::mutex _sleep;
 };
 
 using thread_pool = basic_load_balancing_thread_pool<std::deque,std::allocator>;
+#endif
