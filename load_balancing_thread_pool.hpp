@@ -11,7 +11,6 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-#include <numeric>
 #include <cmath>
 
 
@@ -30,8 +29,7 @@ private:
         queue_t<work_type> _work;
     };
 public:
-
-    basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N)
+    basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
     {
         for(auto&& th: _thread_data){
             th = std::unique_ptr<thread_data>(new thread_data());
@@ -152,11 +150,10 @@ private:
             return {};
         }
     }
-    work_type init_thread(thread_data& _data)
+    work_type init_thread(thread_data& data)
     {
         //where index is the index used to match up the threads to the queues and loads
         return [&](){
-            thread_data& data = const_cast<thread_data&>(_data);
             auto&& consume = [&](){
                 work_type task;
                 {
