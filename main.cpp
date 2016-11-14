@@ -2,11 +2,12 @@
 #include <iostream>
 
 std::mutex pr;
+int counter = 0;
 
 template<typename T>
 void sync_print(T const& value){
     std::unique_lock<std::mutex> lk{pr};
-    std::cout<< value<<std::endl;
+    std::cout<<counter++<<" "<< value<<std::endl;
 }
 
 int main(int argc, char** argv)
