@@ -1,27 +1,25 @@
 #include "load_balancing_thread_pool.hpp"
 #include <iostream>
 
-std::mutex pr;
-int counter = 0;
 
-template<typename T>
-void sync_print(T const& value){
-    std::unique_lock<std::mutex> lk{pr};
-    std::cout<<counter++<<" "<< value<<std::endl;
-}
 
 int main(int argc, char** argv)
 {
     try{
         thread_pool pool;
-
+        std::vector<std::future<int>> out;
         for(int i =0; i < 10000;++i){
-            pool.push([](int k){
-                sync_print(k);
-            },i);
+            out.push_back(pool.push([](int k){
+                //sync_print(k);
+                ++k;
+                return k;
+            },i));
+        }
+        for(auto&& o: out){
+            std::cout<<o.get()<<std::endl;
         }
     }catch(std::exception& e){
-        std::cout<<e.what()<<std::endl;
+        sync_print(e.what());
     }
     return 0;
 }

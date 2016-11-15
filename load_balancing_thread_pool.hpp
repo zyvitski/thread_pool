@@ -12,6 +12,14 @@
 #include <vector>
 #include <cmath>
 #include <numeric>
+#include <iostream>
+
+template<typename T>
+void sync_print(T const& value){
+    static std::mutex pr;
+    std::unique_lock<std::mutex> lk{pr};
+    std::cout<<value<<std::endl;
+}
 
 
 template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
@@ -22,7 +30,8 @@ private:
     using work_type = std::function<work_signiture>;
     using queue_type = queue_t<work_type,allocator_t<work_type>>;
 
-    class worker{
+    class worker
+    {
     public:
         worker():_thread(std::bind(&worker::work,this)),_load(0),_running(true){}
         ~worker(){
@@ -30,68 +39,60 @@ private:
                 _thread.join();
             }
         }
-        void push(work_type&& w){
-            _work.push_back(std::forward<work_type&&>(w));
-            std::atomic_thread_fence(std::memory_order_release);
-            std::atomic_fetch_add_explicit(&_load,1ul,std::memory_order_relaxed);
-            notify();
+        bool push(work_type&& w){
+            if(_running){
+                std::unique_lock<std::mutex> lk{_lock};
+                _work_q.push_back(std::forward<work_type&&>(w));
+                ++_load;
+                notify();
+                return true;
+            }else return false;
         }
         std::size_t load(){
-
-            return std::atomic_load_explicit(&_load,std::memory_order_acquire);
+            return _load;
         }
         const std::size_t load() const{
-            return std::atomic_load_explicit(&_load,std::memory_order_acquire);
+            return _load;
         }
         void notify(){
             _cv.notify_one();
         }
         bool running(){
-            return std::atomic_load_explicit(&_running,std::memory_order_acquire);
+            return _running;
         }
         void running(bool value){
-            std::atomic_store_explicit(&_running,value,std::memory_order_release);
+            _running = value;
         }
 
     private:
         void work(){
+            while (_running)
             {
                 std::unique_lock<std::mutex> lk{_lock};
                 _cv.wait(lk,[this](){
-                    return std::atomic_load_explicit(&_load,std::memory_order_acquire) || !running();
+                    return !_running || _load;
                 });
-            }
-
-            while (running())
-            {
-                while (std::atomic_load_explicit(&_load,std::memory_order_acquire))
+                while (_load)
                 {
-                    consume();
+                    auto task = std::move(_work_q.front());
+                    _work_q.pop_front();
+                    task();
+                    --_load;
                 }
             }
-            while (std::atomic_load_explicit(&_load,std::memory_order_acquire))
+            while (_load)
             {
-                consume();
-            }
-        }
-        inline void consume(){
-            if(std::atomic_load_explicit(&_load,std::memory_order_relaxed)){
-                work_type task = std::move(_work.front());
-                _work.pop_front();
+                auto task = std::move(_work_q.front());
+                _work_q.pop_front();
                 task();
-
-                std::atomic_thread_fence(std::memory_order_acquire);
-                std::atomic_thread_fence(std::memory_order_release);
-
-                std::atomic_fetch_sub_explicit(&_load,1ul,std::memory_order_relaxed);
+                --_load;
             }
         }
-
         std::thread _thread;
         std::mutex _lock;
         std::atomic_size_t _load;
         std::atomic_bool _running;
-        queue_type _work;
+        queue_type _work_q;
         std::condition_variable _cv;
     };
 public:
