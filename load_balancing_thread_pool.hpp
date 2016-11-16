@@ -127,7 +127,11 @@ public:
     basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
     {
         for(auto&& th: _thread_data){
+#ifdef __cpp_lib_make_unique
+            th = std::make_unique<work_type>();
+#else
             th = std::unique_ptr<worker_type>(new worker_type());
+#endif
         }
     }
     ~basic_load_balancing_thread_pool()
@@ -158,7 +162,11 @@ public:
         {
             for(std::size_t i = 0; i < diff; ++i)
             {
+#ifdef __cpp_lib_make_unique
+                _thread_data.push_back(std::make_unique<worker_type>());
+#else
                 _thread_data.push_back(std::unique_ptr<worker_type>(new worker_type()));
+#endif
             }
         }
         else if(old > N)
