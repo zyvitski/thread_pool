@@ -15,12 +15,7 @@
 #include <iostream>
 #include "type_erased_task.hpp"
 
-template<typename T>
-void sync_print(T const& value){
-    static std::mutex pr;
-    std::unique_lock<std::mutex> lk{pr};
-    std::cout<<value<<std::endl;
-}
+
 namespace workers{
     template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
     class worker
@@ -30,13 +25,17 @@ namespace workers{
         using work_type = std::function<work_signiture>;
         using queue_type = queue_t<work_type,allocator_t<work_type>>;
         worker():_thread(std::bind(&worker::work,this)),_load(0),_running(true){}
-        ~worker(){
-            if(_thread.joinable()){
+        ~worker()
+        {
+            if(_thread.joinable())
+            {
                 _thread.join();
             }
         }
-        bool push(work_type&& w){
-            if(_running){
+        bool push(work_type&& w)
+        {
+            if(_running)
+            {
                 std::unique_lock<std::mutex> lk{_lock};
                 _work_q.push_back(std::forward<work_type&&>(w));
                 ++_load;
@@ -44,7 +43,8 @@ namespace workers{
                 return true;
             }else return false;
         }
-        bool push(queue_type&& w){
+        bool push(queue_type&& w)
+        {
             if(_running){
                 std::unique_lock<std::mutex> lk{_lock};
                 while (w.size())
@@ -57,21 +57,25 @@ namespace workers{
                 return true;
             }else return false;
         }
-        std::size_t load(){
+        std::size_t load()
+        {
             return _load;
         }
-        const std::size_t load() const{
+        const std::size_t load() const
+        {
             return _load;
         }
-        bool running(){
+        bool running()
+        {
             return _running;
         }
-        void running(bool value){
+        void running(bool value)
+        {
             _running = value;
             _cv.notify_one();
-
         }
-        void notify(){
+        void notify()
+        {
             _cv.notify_one();
         }
     private:
@@ -92,7 +96,8 @@ namespace workers{
                 consume_one();
             }
         }
-        void consume_one(){
+        inline void consume_one()
+        {
             auto task = std::move(_work_q.front());
             _work_q.pop_front();
             task();
@@ -106,18 +111,19 @@ namespace workers{
         std::condition_variable _cv;
     };
 
+    template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+    using default_worker = worker<queue_t,allocator_t>;
+
 }
 
-template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+template< typename worker_t>
 class basic_load_balancing_thread_pool
 {
-private:
+public:
+    using worker_type = worker_t;
     using work_signiture = void();
     using work_type = std::function<work_signiture>;
-    using queue_type = queue_t<work_type,allocator_t<work_type>>;
-    using worker_type = workers::worker<queue_t,allocator_t>;
-
-public:
+    using queue_type = typename worker_type::queue_type;
     basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
     {
         for(auto&& th: _thread_data){
@@ -195,5 +201,5 @@ private:
     std::vector<std::unique_ptr<worker_type>> _thread_data;
 };
 
-using thread_pool = basic_load_balancing_thread_pool<std::deque,std::allocator>;
+using thread_pool = basic_load_balancing_thread_pool<workers::default_worker<std::deque,std::allocator>>;
 #endif
