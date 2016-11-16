@@ -13,57 +13,71 @@
 #include <cmath>
 #include <numeric>
 #include <iostream>
-
-template<typename T>
-void sync_print(T const& value){
-    static std::mutex pr;
-    std::unique_lock<std::mutex> lk{pr};
-    std::cout<<value<<std::endl;
-}
+#include "type_erased_task.hpp"
 
 
-template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
-class basic_load_balancing_thread_pool
-{
-private:
-    using work_signiture = void();
-    using work_type = std::function<work_signiture>;
-    using queue_type = queue_t<work_type,allocator_t<work_type>>;
-
+namespace workers{
+    template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
     class worker
     {
     public:
+        using work_signiture = void();
+        using work_type = std::function<work_signiture>;
+        using queue_type = queue_t<work_type,allocator_t<work_type>>;
         worker():_thread(std::bind(&worker::work,this)),_load(0),_running(true){}
-        ~worker(){
-            if(_thread.joinable()){
+        ~worker()
+        {
+            if(_thread.joinable())
+            {
                 _thread.join();
             }
         }
-        bool push(work_type&& w){
-            if(_running){
+        bool push(work_type&& w)
+        {
+            if(_running)
+            {
                 std::unique_lock<std::mutex> lk{_lock};
                 _work_q.push_back(std::forward<work_type&&>(w));
                 ++_load;
-                notify();
+                _cv.notify_one();
                 return true;
             }else return false;
         }
-        std::size_t load(){
+        bool push(queue_type&& w)
+        {
+            if(_running){
+                std::unique_lock<std::mutex> lk{_lock};
+                while (w.size())
+                {
+                    _work_q.push_back(std::move(w.front()));
+                    w.pop_front();
+                    ++_load;
+                }
+                _cv.notify_one();
+                return true;
+            }else return false;
+        }
+        std::size_t load()
+        {
             return _load;
         }
-        const std::size_t load() const{
+        const std::size_t load() const
+        {
             return _load;
         }
-        void notify(){
-            _cv.notify_one();
-        }
-        bool running(){
+        bool running()
+        {
             return _running;
         }
-        void running(bool value){
+        void running(bool value)
+        {
             _running = value;
+            _cv.notify_one();
         }
-
+        void notify()
+        {
+            _cv.notify_one();
+        }
     private:
         void work(){
             while (_running)
@@ -74,19 +88,20 @@ private:
                 });
                 while (_load)
                 {
-                    auto task = std::move(_work_q.front());
-                    _work_q.pop_front();
-                    task();
-                    --_load;
+                    consume_one();
                 }
             }
             while (_load)
             {
-                auto task = std::move(_work_q.front());
-                _work_q.pop_front();
-                task();
-                --_load;
+                consume_one();
             }
+        }
+        inline void consume_one()
+        {
+            auto task = std::move(_work_q.front());
+            _work_q.pop_front();
+            task();
+            --_load;
         }
         std::thread _thread;
         std::mutex _lock;
@@ -95,11 +110,24 @@ private:
         queue_type _work_q;
         std::condition_variable _cv;
     };
+
+    template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+    using default_worker = worker<queue_t,allocator_t>;
+
+}
+
+template< typename worker_t>
+class basic_load_balancing_thread_pool
+{
 public:
+    using worker_type = worker_t;
+    using work_signiture = void();
+    using work_type = std::function<work_signiture>;
+    using queue_type = typename worker_type::queue_type;
     basic_load_balancing_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
     {
         for(auto&& th: _thread_data){
-            th = std::unique_ptr<worker>(new worker());
+            th = std::unique_ptr<worker_type>(new worker_type());
         }
     }
     ~basic_load_balancing_thread_pool()
@@ -130,7 +158,7 @@ public:
         {
             for(std::size_t i = 0; i < diff; ++i)
             {
-                _thread_data.push_back(std::unique_ptr<worker>(new worker()));
+                _thread_data.push_back(std::unique_ptr<worker_type>(new worker_type()));
             }
         }
         else if(old > N)
@@ -139,21 +167,27 @@ public:
             {
                 _thread_data.back()->running(false);
                 _thread_data.back()->notify();
-                std::unique_ptr<worker> temp;
+                std::unique_ptr<worker_type> temp;
                 std::swap(temp,_thread_data.back());
                 _thread_data.pop_back();
             }
         }
     }
-
-
+    void push(queue_type&& q)
+    {
+        _decide_push()->push(std::forward<queue_type&&>(q));
+    }
 
     template<typename func,typename... args_t>
     auto push(func && f, args_t&&... args) -> std::future<decltype(f(args...))>
     {
-        auto&& pk = std::make_shared<std::packaged_task<decltype(f(args...))()>>(std::bind(std::forward<func&&>(f),std::forward<args_t&&>(args)...));
-        //wrap task
-        worker* lowest = _thread_data.front().get();
+        auto task = type_erased_task(std::forward<func&&>(f),std::forward<args_t&&>(args)...);
+        _decide_push()->push(std::move(task.first));
+        return std::move(task.second);
+    }
+private:
+    worker_type* _decide_push(){
+        worker_type* lowest = _thread_data.front().get();
         for(auto&& data: _thread_data)
         {
             if(data->running() && (data->load() < lowest->load()))
@@ -161,16 +195,11 @@ public:
                 lowest = data.get();
             }
         }
-        lowest->push([pk]()
-        {
-            (*pk)();
-        });
-        return pk->get_future();
+        return lowest;
     }
-private:
 
-    std::vector<std::unique_ptr<worker>> _thread_data;
+    std::vector<std::unique_ptr<worker_type>> _thread_data;
 };
 
-using thread_pool = basic_load_balancing_thread_pool<std::deque,std::allocator>;
+using thread_pool = basic_load_balancing_thread_pool<workers::default_worker<std::deque,std::allocator>>;
 #endif
