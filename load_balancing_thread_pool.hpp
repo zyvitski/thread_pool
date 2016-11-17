@@ -82,24 +82,27 @@ namespace workers{
         void work(){
             while (_running)
             {
-                std::unique_lock<std::mutex> lk{_lock};
-                _cv.wait(lk,[this](){
-                    return !_running || _load;
-                });
-                while (_load)
+                {
+                    std::unique_lock<std::mutex> lk{_lock};
+                    _cv.wait(lk,[this](){
+                        return !_running || _load;
+                    });
+                    std::swap(_work_q,_worker_copy);
+                }
+                while (!_worker_copy.empty())
                 {
                     consume_one();
                 }
             }
-            while (_load)
+            while (!_worker_copy.empty())
             {
                 consume_one();
             }
         }
         inline void consume_one()
         {
-            auto task = std::move(_work_q.front());
-            _work_q.pop_front();
+            auto task = std::move(_worker_copy.front());
+            _worker_copy.pop_front();
             task();
             --_load;
         }
@@ -108,6 +111,7 @@ namespace workers{
         std::atomic_size_t _load;
         std::atomic_bool _running;
         queue_type _work_q;
+        queue_type _worker_copy;
         std::condition_variable _cv;
     };
 
