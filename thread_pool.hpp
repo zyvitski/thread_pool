@@ -82,18 +82,28 @@ namespace workers{
         void work(){
             while (_running)
             {
+                try
                 {
-                    std::unique_lock<std::mutex> lk{_lock};
-                    _cv.wait(lk,[this](){
-                        return !_running || _load;
-                    });
-                    std::swap(_work_q,_worker_copy);
+                    {//locked scope
+                        std::unique_lock<std::mutex> lk{_lock};
+                        _cv.wait(lk,[this]()
+                        {
+                            return !_running || _load;
+                        });
+                        std::swap(_work_q,_worker_copy);
+                    }
+                    while (!_worker_copy.empty())
+                    {
+                        consume_one();
+                    }
                 }
-                while (!_worker_copy.empty())
+                catch(std::exception& e)
                 {
-                    consume_one();
+                    std::cerr<<e.what()<<std::endl;
+                    continue;
                 }
             }
+            std::unique_lock<std::mutex> lk{_lock};
             while (!_worker_copy.empty())
             {
                 consume_one();
@@ -128,9 +138,10 @@ public:
     using work_signiture = void();
     using work_type = std::function<work_signiture>;
     using queue_type = typename worker_type::queue_type;
-    basic_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
+    basic_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_workers(N > 0 ? N : std::thread::hardware_concurrency())
     {
-        for(auto&& th: _thread_data){
+        for(auto&& th: _workers)
+        {
 #ifdef __cpp_lib_make_unique
             th = std::make_unique<work_type>();
 #else
@@ -140,7 +151,7 @@ public:
     }
     ~basic_thread_pool()
     {
-        for (auto&& w: _thread_data)
+        for (auto&& w: _workers)
         {
             w->running(false);
             w->notify();
@@ -155,21 +166,21 @@ public:
 
     std::size_t size() const
     {
-        return _thread_data.size();
+        return _workers.size();
     }
 
     void resize(std::size_t const& N)
     {
-        long old = _thread_data.size();
+        long old = _workers.size();
         long diff = std::abs((double) N - old);
         if(N > old)
         {
             for(std::size_t i = 0; i < diff; ++i)
             {
 #ifdef __cpp_lib_make_unique
-                _thread_data.push_back(std::make_unique<worker_type>());
+                _workers.push_back(std::make_unique<worker_type>());
 #else
-                _thread_data.push_back(std::unique_ptr<worker_type>(new worker_type()));
+                _workers.push_back(std::unique_ptr<worker_type>(new worker_type()));
 #endif
             }
         }
@@ -177,11 +188,11 @@ public:
         {
             for(std::size_t i =0 ; i < diff; ++i)
             {
-                _thread_data.back()->running(false);
-                _thread_data.back()->notify();
+                _workers.back()->running(false);
+                _workers.back()->notify();
                 std::unique_ptr<worker_type> temp;
-                std::swap(temp,_thread_data.back());
-                _thread_data.pop_back();
+                std::swap(temp,_workers.back());
+                _workers.pop_back();
             }
         }
     }
@@ -199,8 +210,8 @@ public:
     }
 private:
     worker_type* _decide_push(){
-        worker_type* lowest = _thread_data.front().get();
-        for(auto&& data: _thread_data)
+        worker_type* lowest = _workers.front().get();
+        for(auto&& data: _workers)
         {
             if(data->running() && (data->load() < lowest->load()))
             {
@@ -210,7 +221,7 @@ private:
         return lowest;
     }
 
-    std::vector<std::unique_ptr<worker_type>> _thread_data;
+    std::vector<std::unique_ptr<worker_type>> _workers;
 };
 
 using thread_pool = basic_thread_pool<workers::default_worker<std::deque,std::allocator>>;
