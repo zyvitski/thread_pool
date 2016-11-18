@@ -1,7 +1,5 @@
-
-
-#ifndef thread_pool_h
-#define thread_pool_h
+#ifndef basic_thread_pool_hpp
+#define basic_thread_pool_hpp
 
 #include <atomic>
 #include <condition_variable>
@@ -12,210 +10,208 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <cmath>
+#include <numeric>
+#include <iostream>
+#include "type_erased_task.hpp"
 
-template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+
+namespace workers{
+    template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+    class worker
+    {
+    public:
+        using work_signiture = void();
+        using work_type = std::function<work_signiture>;
+        using queue_type = queue_t<work_type,allocator_t<work_type>>;
+        worker():_thread(std::bind(&worker::work,this)),_load(0),_running(true){}
+        ~worker()
+        {
+            if(_thread.joinable())
+            {
+                _thread.join();
+            }
+        }
+        bool push(work_type&& w)
+        {
+            if(_running)
+            {
+                std::unique_lock<std::mutex> lk{_lock};
+                _work_q.push_back(std::forward<work_type&&>(w));
+                ++_load;
+                _cv.notify_one();
+                return true;
+            }else return false;
+        }
+        bool push(queue_type&& w)
+        {
+            if(_running){
+                std::unique_lock<std::mutex> lk{_lock};
+                while (w.size())
+                {
+                    _work_q.push_back(std::move(w.front()));
+                    w.pop_front();
+                    ++_load;
+                }
+                _cv.notify_one();
+                return true;
+            }else return false;
+        }
+        std::size_t load()
+        {
+            return _load;
+        }
+        const std::size_t load() const
+        {
+            return _load;
+        }
+        bool running()
+        {
+            return _running;
+        }
+        void running(bool value)
+        {
+            _running = value;
+            _cv.notify_one();
+        }
+        void notify()
+        {
+            _cv.notify_one();
+        }
+    private:
+        void work(){
+            while (_running)
+            {
+                {
+                    std::unique_lock<std::mutex> lk{_lock};
+                    _cv.wait(lk,[this](){
+                        return !_running || _load;
+                    });
+                    std::swap(_work_q,_worker_copy);
+                }
+                while (!_worker_copy.empty())
+                {
+                    consume_one();
+                }
+            }
+            while (!_worker_copy.empty())
+            {
+                consume_one();
+            }
+        }
+        inline void consume_one()
+        {
+            auto task = std::move(_worker_copy.front());
+            _worker_copy.pop_front();
+            task();
+            --_load;
+        }
+        std::thread _thread;
+        std::mutex _lock;
+        std::atomic_size_t _load;
+        std::atomic_bool _running;
+        queue_type _work_q;
+        queue_type _worker_copy;
+        std::condition_variable _cv;
+    };
+
+    template< template<typename...> class queue_t, template<typename...> class allocator_t = std::allocator>
+    using default_worker = worker<queue_t,allocator_t>;
+
+}
+
+template< typename worker_t>
 class basic_thread_pool
 {
-    using function_wrapper_type = std::function<void()>;
-    using queue_type = queue_t<function_wrapper_type,allocator_t<function_wrapper_type>>;
 public:
-
-    using size_type = std::size_t;
-
-
-    explicit basic_thread_pool(size_type threads = std::thread::hardware_concurrency(),
-                               bool should_finish_work=true) :_workers(threads),
-                                                              _should_finish_before_exit(should_finish_work),
-                                                              _running(true),
-                                                              _forced_idle(false)
+    using worker_type = worker_t;
+    using work_signiture = void();
+    using work_type = std::function<work_signiture>;
+    using queue_type = typename worker_type::queue_type;
+    basic_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_thread_data(N > 0 ? N : std::thread::hardware_concurrency())
     {
-        for(auto&& thrd: _workers){
-            thrd = std::thread(thread_init());
+        for(auto&& th: _thread_data){
+#ifdef __cpp_lib_make_unique
+            th = std::make_unique<work_type>();
+#else
+            th = std::unique_ptr<worker_type>(new worker_type());
+#endif
         }
     }
-
     ~basic_thread_pool()
     {
-        //clear all work if we dont need to do it before exit
-        if (!_should_finish_before_exit) {
-            clear();
-        }
-
-        //wake all threads
-        _running = false;
-        _cv.notify_all();
-
-        //join all threads
-        for (auto&& thrd: _workers) {
-            if(thrd.joinable()){
-                thrd.join();
-            }
+        for (auto&& w: _thread_data)
+        {
+            w->running(false);
+            w->notify();
         }
     }
 
-    //non moveable
-    basic_thread_pool(basic_thread_pool&&) = delete;
-    basic_thread_pool& operator=(basic_thread_pool&&)= delete;
-
-    //non copyable
     basic_thread_pool(basic_thread_pool&)=delete;
+    basic_thread_pool(basic_thread_pool&&)=delete;
     basic_thread_pool& operator=(basic_thread_pool&)=delete;
+    basic_thread_pool& operator=(basic_thread_pool&&)=delete;
 
-    //number of workers
-    const size_type size()
+
+    std::size_t size() const
     {
-        std::unique_lock<std::mutex> lk{_workers_mutex};
-        return _workers.size();
+        return _thread_data.size();
     }
 
-    //resize number of workers
-    void resize(size_type const& new_size)
+    void resize(std::size_t const& N)
     {
-        //lock access to work and workers
-        std::unique_lock<std::mutex> lk{_workers_mutex}, lk2{_work_mutex};
-        auto old = _workers.size();
-        if (new_size > old) {
-            //grow
-            for(int i=0; i < (new_size-old);++i){
-                _workers.emplace_back(thread_init());
+        long old = _thread_data.size();
+        long diff = std::abs((double) N - old);
+        if(N > old)
+        {
+            for(std::size_t i = 0; i < diff; ++i)
+            {
+#ifdef __cpp_lib_make_unique
+                _thread_data.push_back(std::make_unique<worker_type>());
+#else
+                _thread_data.push_back(std::unique_ptr<worker_type>(new worker_type()));
+#endif
             }
-        }else if(new_size < old){
-            _forced_idle=true;
-            _cv.notify_all();//force idle
-            for (int i=0; i<(old - new_size); ++i)
-            {   _workers.back().detach();//break it away
-                _workers.pop_back();//get rin of it
-            }
-            _forced_idle=false;
-            _cv.notify_all();//end idle
         }
-        //else no change needed
-
+        else if(old > N)
+        {
+            for(std::size_t i =0 ; i < diff; ++i)
+            {
+                _thread_data.back()->running(false);
+                _thread_data.back()->notify();
+                std::unique_ptr<worker_type> temp;
+                std::swap(temp,_thread_data.back());
+                _thread_data.pop_back();
+            }
+        }
     }
-
-    //clear all work
-    void clear()
+    void push(queue_type&& q)
     {
-        std::unique_lock<std::mutex> lk{_work_mutex};
-        _work.clear();
+        _decide_push()->push(std::forward<queue_type&&>(q));
     }
 
-
-    //push a function onto the pool
     template<typename func,typename... args_t>
     auto push(func && f, args_t&&... args) -> std::future<decltype(f(args...))>
     {
-        auto&& pk = std::make_shared<std::packaged_task<decltype(f(args...))()>>(std::bind(std::forward<func&&>(f),std::forward<args_t&&>(args)...));
-        //wrap task
+        auto task = type_erased_task(std::forward<func&&>(f),std::forward<args_t&&>(args)...);
+        _decide_push()->push(std::move(task.first));
+        return std::move(task.second);
+    }
+private:
+    worker_type* _decide_push(){
+        worker_type* lowest = _thread_data.front().get();
+        for(auto&& data: _thread_data)
         {
-            std::unique_lock<std::mutex> lk{_work_mutex};
-            _work.push_back([pk](){
-                (*pk)();
-            });
-        }
-        _cv.notify_one();
-
-        return pk->get_future();
-    }
-
-
-
-    //find out if the pool is set to finish work before exit
-    bool will_finish_work_before_exit() const{
-        return _should_finish_before_exit;
-    }
-    //modify _should_finish_befoer_exit
-    void will_finish_work_before_exit(bool const& value){
-        _should_finish_before_exit = value;
-    }
-
-protected:
-
-    std::vector<std::thread> _workers;
-
-    std::condition_variable _cv;
-
-    std::mutex _work_mutex;
-
-    std::mutex _workers_mutex;
-
-    queue_type _work;
-
-    std::atomic_bool _should_finish_before_exit;//do we need to finish all work before workers exit
-    std::atomic_bool _running;//is the thread pool active
-    std::atomic_bool _forced_idle;//should all threads run as idle
-
-
-    function_wrapper_type thread_init(){
-        return [this](){
-
-            while (_running || _should_finish_before_exit)
+            if(data->running() && (data->load() < lowest->load()))
             {
-                std::unique_lock<std::mutex> lk{_work_mutex};
-                _cv.wait(lk,[this](){
-                    return !_running || !_work.empty() || _forced_idle;
-                });
-                //if we are not idle
-                if (!_forced_idle) {
-
-                    //if the pool is not still running
-                    if (!_running)
-                    {
-                        //do we have to finish all work before exiting
-                        if (_should_finish_before_exit)
-                        {
-                            //is there work
-                            if(!_work.empty()){
-                                auto task = _work.front();
-                                _work.pop_front();
-                                //did i just finish the work?
-                                if (_work.empty())
-                                {
-                                    //if so the we dont have to keep working
-                                    _should_finish_before_exit=false;
-                                }
-                                lk.unlock();
-                                task();
-                            }
-                            //no work so exit
-                            else
-                            {
-                                _should_finish_before_exit=false;
-                                lk.unlock();
-                                _cv.notify_all();
-                                break;
-                            }
-                        }
-                        //dont have to finish work before exit
-                        else
-                        {
-                            lk.unlock();
-                            _cv.notify_all();
-                            break;
-                        }
-                    }
-                    //the pool is running
-                    else{
-                        //is ther eany work
-                        if(!_work.empty())
-                        {
-                            auto task = _work.front();
-                            _work.pop_front();
-                            lk.unlock();
-                            task();
-                        }
-                    }
-                }
+                lowest = data.get();
             }
-        };
+        }
+        return lowest;
     }
 
+    std::vector<std::unique_ptr<worker_type>> _thread_data;
 };
 
-
-using thread_pool = basic_thread_pool<std::deque,std::allocator>;
-
-
-
-
-#endif /* thread_pool_h */
+using thread_pool = basic_thread_pool<workers::default_worker<std::deque,std::allocator>>;
+#endif
