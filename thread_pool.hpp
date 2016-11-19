@@ -80,9 +80,9 @@ namespace workers{
         }
     private:
         void work(){
-            while (_running)
+            try
             {
-                try
+                while (_running)
                 {
                     {//locked scope
                         std::unique_lock<std::mutex> lk{_lock};
@@ -97,16 +97,15 @@ namespace workers{
                         consume_one();
                     }
                 }
-                catch(std::exception& e)
+                std::unique_lock<std::mutex> lk{_lock};
+                while (!_worker_copy.empty())
                 {
-                    std::cerr<<e.what()<<std::endl;
-                    continue;
+                    consume_one();
                 }
             }
-            std::unique_lock<std::mutex> lk{_lock};
-            while (!_worker_copy.empty())
+            catch(std::exception& e)
             {
-                consume_one();
+                std::cerr<<e.what()<<std::endl;
             }
         }
         inline void consume_one()
@@ -209,7 +208,8 @@ public:
         return std::move(task.second);
     }
 private:
-    worker_type* _decide_push(){
+    worker_type* _decide_push()
+    {
         worker_type* lowest = _workers.front().get();
         for(auto&& data: _workers)
         {

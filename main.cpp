@@ -21,6 +21,7 @@ int main(int argc, char** argv)
                 return i;
             }));
         }
+
         out.back().wait();
         auto ot = std::chrono::high_resolution_clock::now();
         std::cout<< std::chrono::duration<double>(ot - it).count()<<std::endl;
