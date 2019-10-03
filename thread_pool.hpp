@@ -21,8 +21,8 @@ namespace workers{
     class worker
     {
     public:
-        using work_signiture = void();
-        using work_type = std::function<work_signiture>;
+        using work_signature = void();
+        using work_type = std::function<work_signature>;
         using queue_type = queue_t<work_type,allocator_t<work_type>>;
         worker():_thread(std::bind(&worker::work,this)),_load(0),_running(true){}
         ~worker()
@@ -134,8 +134,8 @@ class basic_thread_pool
 {
 public:
     using worker_type = worker_t;
-    using work_signiture = void();
-    using work_type = std::function<work_signiture>;
+    using work_signature = void();
+    using work_type = std::function<work_signature>;
     using queue_type = typename worker_type::queue_type;
     basic_thread_pool(std::size_t N = std::thread::hardware_concurrency()) :_workers(N > 0 ? N : std::thread::hardware_concurrency())
     {
